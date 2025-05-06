@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+###
+# File: __init__.py
+# Project: comfy-image-upload
+# Author: fichas
+###
+
+__version__ = "0.1.0"
+
+import os
+import shutil
+import json
+import tempfile
+import zipfile
+import logging
+import time
+from pathlib import Path
+import imghdr  # 用于检测文件是否为图片
+
+from aiohttp import web
+import folder_paths
+
+# 设置日志
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+log = logging.getLogger("comfy-image-upload")
+
+# 是否在ComfyUI环境中运行
+IN_COMFY = False
+try:
+    # 直接从server导入PromptServer
+    from server import PromptServer
+
+    IN_COMFY = True
+except (ModuleNotFoundError, ImportError):
+    try:
+        import sys
+        import os
+
+        # 手动添加ComfyUI路径到sys.path
+        comfy_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        if comfy_dir not in sys.path:
+            sys.path.append(comfy_dir)
+        from server import PromptServer
+
+        IN_COMFY = True
+    except (ModuleNotFoundError, ImportError):
+        IN_COMFY = False
+        log.warning("未在ComfyUI环境中运行，某些功能可能无法正常使用")
+except Exception as e:
+    IN_COMFY = False
+    log.warning(f"初始化ComfyUI环境时出错: {str(e)}")
+    log.warning("未在ComfyUI环境中运行，某些功能可能无法正常使用")
+
+# 获取当前目录
+here = Path(__file__).parent.absolute()
+
+# 获取ComfyUI的输入目录
+input_dir = folder_paths.get_input_directory()
+log.info(f"输入目录: {input_dir}")
+
+# 支持的图片格式
+IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".heic",
+}
+
+# 公开的节点和显示名称映射（本扩展不包含节点）
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
+# 确认WEB_DIRECTORY指向custom_node下的web目录，添加扩展JS
+WEB_DIRECTORY = "./web"
+
+
+# 安全性验证函数
+def is_safe_path(path):
+    """验证路径是否安全，防止路径遍历攻击"""
+    # 确保路径不包含 .. 或绝对路径
+    normalized = os.path.normpath(path)
+    return not normalized.startswith("..") and not os.path.isabs(normalized)
+
+
+def is_image_file(file_path):
+    """验证文件是否为有效的图片"""
+    # 首先检查扩展名
+    ext = os.path.splitext(file_path.lower())[1]
+    if ext not in IMAGE_EXTENSIONS:
+        return False
+
+    # 然后使用imghdr验证文件内容
+    img_type = imghdr.what(file_path)
+    return img_type is not None
+
+
+# 获取输入目录下的所有子目录
+def get_input_subdirectories():
+    subdirs = [""]  # 空字符串表示根目录
+    try:
+        for item in os.listdir(input_dir):
+            full_path = os.path.join(input_dir, item)
+            if os.path.isdir(full_path):
+                subdirs.append(item)
+    except Exception as e:
+        log.error(f"获取子目录列表时出错: {str(e)}")
+    return subdirs
+
+
+# 创建一个辅助函数来处理JSON响应
+def create_json_response(data, status=200):
+    """创建确保中文不被转义的JSON响应"""
+    return web.Response(
+        text=json.dumps(data, ensure_ascii=False),
+        content_type="application/json",
+        status=status,
+    )
+
+
+# 创建通用的上传处理函数
+async def handle_upload(request, process_func):
+    """通用上传处理函数
+    
+    Args:
+        request: HTTP请求对象
+        process_func: 处理具体上传逻辑的回调函数
+        
+    Returns:
+        JSON响应
+    """
+    start_time = time.time()
+    temp_files = []
+    
+    try:
+        reader = await request.multipart()
+        result = await process_func(reader, temp_files)
+        
+        elapsed_time = time.time() - start_time
+        result["elapsed_time"] = round(elapsed_time, 2)
+        
+        return create_json_response(result)
+        
+    except Exception as e:
+        log.error(f"上传处理时出错: {str(e)}", exc_info=True)
+        return create_json_response({"error": str(e)}, status=500)
+    finally:
+        # 清理所有临时文件
+        for temp_file in temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.unlink(temp_file)
+                    log.info(f"删除临时文件: {temp_file}")
+            except Exception as e:
+                log.warning(f"清理临时文件失败: {temp_file}, 错误: {str(e)}")
+
+
+# 验证并创建目标目录
+def validate_and_create_target_dir(dir_name, parent_dir=""):
+    """验证并创建目标目录
+    
+    Args:
+        dir_name: 目录名
+        parent_dir: 父目录名(可选)
+        
+    Returns:
+        (目标目录路径, 错误信息)，如无错误则错误信息为None
+    """
+    # 验证目录名是否合法
+    if dir_name and not is_safe_path(dir_name):
+        return None, "非法的目录名称"
+        
+    if parent_dir and not is_safe_path(parent_dir):
+        return None, "非法的父目录名称"
+    
+    # 构建目标路径
+    if parent_dir:
+        target_parent = os.path.join(input_dir, parent_dir)
+        # 确保父目录存在
+        if not os.path.exists(target_parent):
+            log.info(f"创建父目录: {target_parent}")
+            os.makedirs(target_parent, exist_ok=True)
+        target_dir = os.path.join(target_parent, dir_name)
+    else:
+        target_dir = os.path.join(input_dir, dir_name)
+    
+    # 确保目标目录存在
+    if not os.path.exists(target_dir):
+        log.info(f"创建目标目录: {target_dir}")
+        os.makedirs(target_dir, exist_ok=True)
+        
+    return target_dir, None
+
+
+# 创建临时文件并写入内容
+async def save_to_temp_file(field, temp_files, suffix=""):
+    """保存上传内容到临时文件
+    
+    Args:
+        field: 上传字段
+        temp_files: 临时文件列表(用于跟踪清理)
+        suffix: 文件后缀
+        
+    Returns:
+        (临时文件路径, 文件大小), 如果大小为0表示为空文件
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        log.info(f"创建临时文件: {temp_file.name}")
+        content_length = 0
+        while True:
+            chunk = await field.read_chunk()
+            if not chunk:
+                break
+            temp_file.write(chunk)
+            content_length += len(chunk)
+        temp_file_path = temp_file.name
+        
+    temp_files.append(temp_file_path)
+    return temp_file_path, content_length
+
+
+# 重构上传文件夹函数
+async def upload_folder_process(reader, temp_files):
+    log.info("开始处理文件夹上传请求")
+    
+    # 获取文件字段
+    field = await reader.next()
+    if field is None or field.name != "folder_zip":
+        return {"error": "未找到上传的文件"}, 400
+    
+    # 保存到临时文件
+    temp_file_path, content_length = await save_to_temp_file(field, temp_files, suffix=".zip")
+    
+    if content_length == 0:
+        return {"error": "上传的ZIP文件为空"}, 400
+    
+    # 获取目标文件夹名称
+    field = await reader.next()
+    if field is None or field.name != "folder_name":
+        return {"error": "未提供文件夹名称"}, 400
+    
+    folder_name = await field.text()
+    if not folder_name:
+        return {"error": "非法的文件夹名称"}, 400
+    
+    # 获取父目录名称（如果有）
+    field = await reader.next()
+    parent_dir = ""
+    if field is not None and field.name == "parent_dir":
+        parent_dir = await field.text()
+    
+    # 验证并创建目标目录
+    target_dir, error = validate_and_create_target_dir(folder_name, parent_dir)
+    if error:
+        return {"error": error}, 400
+    
+    log.info(f"目标文件夹: {target_dir}")
+    
+    # 检查ZIP文件是否有效
+    try:
+        with zipfile.ZipFile(temp_file_path, "r") as zip_ref:
+            # 检查ZIP文件内容是否安全
+            for file_info in zip_ref.infolist():
+                if file_info.file_size > 100 * 1024 * 1024:  # 100MB限制
+                    return {"error": f"ZIP中包含过大的文件，限制为100MB"}, 400
+                
+                # 防止路径遍历
+                if not is_safe_path(file_info.filename):
+                    return {"error": "ZIP文件包含不安全的路径"}, 400
+    except zipfile.BadZipFile:
+        return {"error": "无效的ZIP文件"}, 400
+    
+    # 如果目标文件夹已存在，先删除它
+    if os.path.exists(target_dir):
+        log.info(f"删除已存在的目标文件夹: {target_dir}")
+        shutil.rmtree(target_dir)
+    
+    # 创建目标文件夹
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # 解压ZIP文件到目标文件夹
+    with zipfile.ZipFile(temp_file_path, "r") as zip_ref:
+        log.info(f"解压ZIP文件到: {target_dir}")
+        zip_ref.extractall(target_dir)
+        file_count = len(zip_ref.infolist())
+    
+    return {
+        "success": True,
+        "message": f"文件夹已成功上传到 {target_dir}，共 {file_count} 个文件",
+        "folder_path": target_dir,
+        "file_count": file_count
+    }
+
+
+# 重构上传图片函数
+async def upload_images_process(reader, temp_files):
+    log.info("开始处理图片上传请求")
+    
+    # 获取上传的目标目录
+    field = await reader.next()
+    if field is None or field.name != "target_dir":
+        return {"error": "未提供目标目录"}, 400
+    
+    target_dir_name = await field.text()
+    
+    # 验证并创建目标目录
+    target_dir = input_dir
+    if target_dir_name:
+        target_dir, error = validate_and_create_target_dir(target_dir_name)
+        if error:
+            return {"error": error}, 400
+    
+    log.info(f"图片上传目标目录: {target_dir}")
+    
+    # 处理上传的所有图片
+    count = 0
+    skipped = 0
+    total_size = 0
+    uploaded_files = []
+    
+    field = await reader.next()
+    while field is not None:
+        if field.name != "images[]":
+            field = await reader.next()
+            continue
+        
+        # 获取文件名
+        filename = field.filename
+        
+        if not any(filename.lower().endswith(ext) for ext in IMAGE_EXTENSIONS):
+            log.warning(f"跳过非图片文件: {filename}")
+            skipped += 1
+            field = await reader.next()
+            continue
+        
+        # 保存到临时文件
+        temp_file_path, file_size = await save_to_temp_file(field, temp_files)
+        
+        # 验证是否为有效图片
+        if not imghdr.what(temp_file_path):
+            log.warning(f"跳过无效的图片文件: {filename}")
+            skipped += 1
+            field = await reader.next()
+            continue
+        
+        # 检查文件大小限制 (50MB)
+        if file_size > 50 * 1024 * 1024:
+            log.warning(f"跳过过大的图片文件: {filename} ({file_size / 1024 / 1024:.2f} MB)")
+            skipped += 1
+            field = await reader.next()
+            continue
+        
+        # 移动文件到目标目录
+        target_file = os.path.join(target_dir, filename)
+        
+        # 如果文件已存在，直接覆盖
+        if os.path.exists(target_file):
+            log.info(f"文件已存在，将覆盖: {filename}")
+        
+        log.info(f"移动文件到: {target_file}")
+        shutil.move(temp_file_path, target_file)
+        temp_files.remove(temp_file_path)  # 从临时文件列表中移除已移动的文件
+        
+        count += 1
+        total_size += file_size
+        uploaded_files.append(os.path.basename(target_file))
+        
+        field = await reader.next()
+    
+    if count == 0:
+        log.warning("未上传任何有效图片")
+        return {"error": "未上传任何有效图片", "skipped": skipped}, 400
+    
+    return {
+        "success": True,
+        "message": f"已成功上传 {count} 张图片" + (f"，跳过 {skipped} 个无效文件" if skipped > 0 else ""),
+        "target_dir": target_dir,
+        "uploaded_files": uploaded_files,
+        "total_size": total_size,
+        "skipped": skipped
+    }
+
+
+# 更新路由处理函数
+async def upload_folder(request):
+    return await handle_upload(request, upload_folder_process)
+
+async def upload_images(request):
+    return await handle_upload(request, upload_images_process)
+
+
+# 获取input目录下所有子目录
+async def get_input_dirs(request):
+    try:
+        log.info("获取输入目录列表")
+        subdirs = get_input_subdirectories()
+        return create_json_response(
+            {"directories": subdirs, "count": len(subdirs), "input_dir": input_dir}
+        )
+    except Exception as e:
+        log.error(f"获取输入目录列表时出错: {str(e)}", exc_info=True)
+        return create_json_response({"error": str(e)}, status=500)
+
+
+# 添加路由和静态文件服务
+if IN_COMFY and hasattr(PromptServer, "instance"):
+    # 注册API路由
+    PromptServer.instance.app.router.add_post("/asoul/folder", upload_folder)
+    PromptServer.instance.app.router.add_post("/asoul/images", upload_images)
+    PromptServer.instance.app.router.add_get("/asoul/input-dirs", get_input_dirs)
+
+    log.info("文件上传功能已初始化 (移除了中间件注入)")
+
+# 扩展信息
+MANIFEST = {
+    "name": "文件上传工具",
+    "version": (0, 1, 0),
+    "author": "ComfyUI Community",
+    "project": "https://github.com/your-username/comfy-image-upload",
+    "description": "允许用户通过简单的界面将整个文件夹或批量图片上传到ComfyUI的input目录中",
+}
