@@ -4,6 +4,275 @@ import { api } from "../../scripts/api.js";
 
 console.log("ASoul上传工具: 扩展脚本加载中...");
 
+// Toast组件实现
+const ASoulToast = {
+  // 存储当前的toast实例
+  toasts: [],
+  // Toast容器
+  container: null,
+  
+  // 初始化Toast容器
+  init() {
+    if (this.container) return;
+    
+    // 创建容器
+    this.container = document.createElement('div');
+    this.container.className = 'asoul-toast-container';
+    this.container.style.position = 'fixed';
+    this.container.style.bottom = '20px';
+    this.container.style.right = '20px';
+    this.container.style.zIndex = '9999';
+    this.container.style.display = 'flex';
+    this.container.style.flexDirection = 'column';
+    this.container.style.gap = '10px';
+    document.body.appendChild(this.container);
+    
+    // 添加样式
+    if (!document.getElementById('asoul-toast-styles')) {
+      const style = document.createElement('style');
+      style.id = 'asoul-toast-styles';
+      style.textContent = `
+        .asoul-toast {
+          display: flex;
+          padding: 1rem;
+          min-width: 280px;
+          max-width: 350px;
+          border-radius: 4px;
+          box-shadow: 0 5px 15px rgba(0,0,0,0.15);
+          margin-bottom: 0.5rem;
+          align-items: center;
+          justify-content: space-between;
+          animation: asoul-toast-in 0.3s ease forwards;
+          transform: translateY(50px);
+          opacity: 0;
+        }
+        
+        .asoul-toast-content {
+          display: flex;
+          flex-direction: column;
+          flex: 1;
+        }
+        
+        .asoul-toast-icon {
+          margin-right: 12px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 24px;
+        }
+        
+        .asoul-toast-summary {
+          font-weight: 700;
+          font-size: 1rem;
+          margin-bottom: 5px;
+        }
+        
+        .asoul-toast-detail {
+          font-size: 0.9rem;
+        }
+        
+        .asoul-toast-success {
+          background-color: #EFF8F1;
+          border-left: 6px solid #4caf50;
+          color: #2E7D32;
+        }
+        
+        .asoul-toast-error {
+          background-color: #FCEEE9;
+          border-left: 6px solid #f44336;
+          color: #C62828;
+        }
+        
+        .asoul-toast-warning {
+          background-color: #FEF6EB;
+          border-left: 6px solid #ff9800;
+          color: #E65100;
+        }
+        
+        .asoul-toast-info {
+          background-color: #E3F2FD;
+          border-left: 6px solid #2196f3;
+          color: #0D47A1;
+        }
+        
+        @keyframes asoul-toast-in {
+          from {
+            transform: translateY(50px);
+            opacity: 0;
+          }
+          to {
+            transform: translateY(0);
+            opacity: 1;
+          }
+        }
+        
+        @keyframes asoul-toast-out {
+          from {
+            transform: translateY(0);
+            opacity: 1;
+          }
+          to {
+            transform: translateY(-20px);
+            opacity: 0;
+          }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  },
+  
+  // 显示Toast
+  show(options) {
+    // 确保容器已初始化
+    this.init();
+    
+    const { message, summary, type = 'info', timeout = 3000 } = options;
+    
+    // 创建Toast元素
+    const toast = document.createElement('div');
+    toast.className = `asoul-toast asoul-toast-${type}`;
+    
+    // 左侧图标
+    const iconContainer = document.createElement('div');
+    iconContainer.className = 'asoul-toast-icon';
+    
+    // 根据类型设置图标
+    let iconSvg = '';
+    switch(type) {
+      case 'success':
+        iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="none" d="M0 0h24v24H0z"/><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-.997-6l7.07-7.071-1.414-1.414-5.656 5.657-2.829-2.829-1.414 1.414L11.003 16z" fill="currentColor"/></svg>';
+        break;
+      case 'error':
+        iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="none" d="M0 0h24v24H0z"/><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-7v2h2v-2h-2zm0-8v6h2V7h-2z" fill="currentColor"/></svg>';
+        break;
+      case 'warning':
+        iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="none" d="M0 0h24v24H0z"/><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-7v2h2v-2h-2zm0-8v6h2V7h-2z" fill="currentColor"/></svg>';
+        break;
+      default: // info
+        iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="none" d="M0 0h24v24H0z"/><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z" fill="currentColor"/></svg>';
+    }
+    
+    iconContainer.innerHTML = iconSvg;
+    toast.appendChild(iconContainer);
+    
+    // 内容容器
+    const content = document.createElement('div');
+    content.className = 'asoul-toast-content';
+    
+    // 如果有标题
+    if (summary) {
+      const summaryElem = document.createElement('div');
+      summaryElem.className = 'asoul-toast-summary';
+      summaryElem.textContent = summary;
+      content.appendChild(summaryElem);
+    }
+    
+    // 消息内容
+    const detail = document.createElement('div');
+    detail.className = 'asoul-toast-detail';
+    detail.textContent = message;
+    content.appendChild(detail);
+    
+    toast.appendChild(content);
+    
+    // 添加到容器
+    this.container.appendChild(toast);
+    
+    // 添加到队列
+    this.toasts.push(toast);
+    
+    // 设置自动消失
+    if (timeout > 0) {
+      setTimeout(() => this.hide(toast), timeout);
+    }
+    
+    return toast;
+  },
+  
+  // 隐藏指定的Toast
+  hide(toast) {
+    if (!toast) return;
+    
+    // 添加退出动画
+    toast.style.animation = 'asoul-toast-out 0.3s forwards';
+    
+    // 移除元素
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.parentNode.removeChild(toast);
+      }
+      // 从队列中移除
+      const index = this.toasts.indexOf(toast);
+      if (index > -1) {
+        this.toasts.splice(index, 1);
+      }
+    }, 300);
+  },
+  
+  // 隐藏所有Toast
+  hideAll() {
+    [...this.toasts].forEach(toast => this.hide(toast));
+  },
+  
+  // 便捷方法
+  success(message, timeout) {
+    return this.show({
+      type: 'success',
+      summary: '成功',
+      message,
+      timeout
+    });
+  },
+  
+  error(message, timeout) {
+    return this.show({
+      type: 'error',
+      summary: '错误',
+      message,
+      timeout
+    });
+  },
+  
+  warning(message, timeout) {
+    return this.show({
+      type: 'warning',
+      summary: '警告',
+      message,
+      timeout
+    });
+  },
+  
+  info(message, timeout) {
+    return this.show({
+      type: 'info',
+      summary: '信息',
+      message,
+      timeout
+    });
+  }
+};
+
+// 简单的通知显示函数
+function showNotification(message, type = 'info', timeout = 3000) {
+  // 尝试使用ComfyUI内置toast
+  if (app.ui && app.ui.toast) {
+    app.ui.toast(message, {type: type, timeout: timeout});
+    return;
+  }
+  
+  // 否则使用自定义toast
+  switch(type) {
+    case 'success':
+      return ASoulToast.success(message, timeout);
+    case 'error':
+      return ASoulToast.error(message, timeout);
+    case 'warning':
+      return ASoulToast.warning(message, timeout);
+    default:
+      return ASoulToast.info(message, timeout);
+  }
+}
 
 // 创建DOM元素辅助函数
 function makeElement(type, className = '') {
@@ -81,11 +350,7 @@ async function uploadFiles(files, targetFolder = '') {
     }
 
     // 显示上传中提示
-    const notification = app.ui.notifications?.show?.({
-      text: `正在上传 ${files.length} 个文件...`,
-      type: 'info',
-      timeout: 0
-    });
+    const notification = showNotification(`正在上传 ${files.length} 个文件...`, 'info', 0);
 
     console.log(`准备上传 ${files.length} 个文件到文件夹: ${targetFolder || '根目录'}`);
 
@@ -96,8 +361,8 @@ async function uploadFiles(files, targetFolder = '') {
     });
 
     // 关闭上传中提示
-    if (notification) {
-      app.ui.notifications.remove(notification);
+    if (notification && notification.remove) {
+      notification.remove();
     }
 
     if (!response.ok) {
@@ -110,20 +375,12 @@ async function uploadFiles(files, targetFolder = '') {
     console.log('上传结果:', result);
 
     // 显示上传成功提示
-    app.ui.notifications?.show?.({
-      text: `成功上传 ${result.uploaded_count || files.length} 个文件`,
-      type: 'success',
-      timeout: 3000
-    });
+    showNotification(`成功上传 ${result.uploaded_count || files.length} 个文件，请刷新页面后才能在LoadImage中查看`, 'success', 5000);
 
     return result;
   } catch (error) {
     console.error('上传文件时出错:', error);
-    app.ui.notifications?.show?.({
-      text: `上传失败: ${error.message}`,
-      type: 'error',
-      timeout: 5000
-    });
+    showNotification(`上传失败: ${error.message}`, 'error', 5000);
     return { success: false, error: error.message };
   }
 }
@@ -144,11 +401,7 @@ async function uploadFolderAsZip(folderName, zipBlob, parentDir = '') {
     }
 
     // 显示上传中提示
-    const notification = app.ui.notifications?.show?.({
-      text: `正在上传文件夹: ${folderName}${parentDir ? ` 到 ${parentDir}` : ''}...`,
-      type: 'info',
-      timeout: 0
-    });
+    const notification = showNotification(`正在上传文件夹: ${folderName}${parentDir ? ` 到 ${parentDir}` : ''}...`, 'info', 0);
 
     console.log(`发送上传请求到 /asoul/folder...`);
     const response = await fetch('/asoul/folder', {
@@ -157,8 +410,8 @@ async function uploadFolderAsZip(folderName, zipBlob, parentDir = '') {
     });
 
     // 关闭上传中提示
-    if (notification) {
-      app.ui.notifications.remove(notification);
+    if (notification && notification.remove) {
+      notification.remove();
     }
 
     if (!response.ok) {
@@ -171,20 +424,25 @@ async function uploadFolderAsZip(folderName, zipBlob, parentDir = '') {
     console.log('上传文件夹结果:', result);
 
     // 显示上传成功提示
-    app.ui.notifications?.show?.({
-      text: result.message || `成功上传文件夹 ${folderName}`,
-      type: 'success',
-      timeout: 3000
-    });
+    let successMessage = '';
+    if (result.message) {
+      successMessage = result.message;
+    } else if (result.extracted_count !== undefined) {
+      successMessage = `成功上传文件夹 ${folderName}，共提取 ${result.extracted_count} 个图片文件`;
+      if (result.skipped_count > 0) {
+        successMessage += `，跳过 ${result.skipped_count} 个非图片文件`;
+      }
+    } else {
+      successMessage = `成功上传文件夹 ${folderName}`;
+    }
+    successMessage += "，请刷新页面后才能在LoadImage中查看";
+    
+    showNotification(successMessage, 'success', 5000);
 
     return result;
   } catch (error) {
     console.error('上传文件夹时出错:', error);
-    app.ui.notifications?.show?.({
-      text: `上传文件夹失败: ${error.message}`,
-      type: 'error',
-      timeout: 5000
-    });
+    showNotification(`上传文件夹失败: ${error.message}`, 'error', 5000);
     return { success: false, error: error.message };
   }
 }
@@ -250,22 +508,14 @@ async function handleDirectoryFiles(items) {
             console.log(`上传结果:`, uploadResult);
           } catch (zipError) {
             console.error(`创建或上传ZIP文件时出错:`, zipError);
-            app.ui.notifications?.show?.({
-              text: `为目录 ${entry.name} 创建ZIP文件失败: ${zipError.message}`,
-              type: 'error',
-              timeout: 5000
-            });
+            showNotification(`为目录 ${entry.name} 创建ZIP文件失败: ${zipError.message}`, 'error', 5000);
           }
         } else {
           console.log(`目录 ${entry.name} 中没有找到文件，跳过`);
         }
       } catch (dirError) {
         console.error(`处理目录 ${entry.name} 时出错:`, dirError);
-        app.ui.notifications?.show?.({
-          text: `处理目录 ${entry.name} 失败: ${dirError.message}`,
-          type: 'error',
-          timeout: 5000
-        });
+        showNotification(`处理目录 ${entry.name} 失败: ${dirError.message}`, 'error', 5000);
       }
     }
 
@@ -283,11 +533,7 @@ async function handleDirectoryFiles(items) {
     };
   } catch (error) {
     console.error('处理目录文件时出错:', error);
-    app.ui.notifications?.show?.({
-      text: `处理目录文件失败: ${error.message}`,
-      type: 'error',
-      timeout: 5000
-    });
+    showNotification(`处理目录文件失败: ${error.message}`, 'error', 5000);
     return { success: false, error: error.message };
   }
 }
@@ -356,121 +602,157 @@ async function collectFilesFromDirectory(directoryEntry, path = '') {
 
 // 添加CSS样式
 function ensureStyles() {
-  if (!document.getElementById('asoul-sidebar-styles')) {
-    const style = document.createElement('style');
-    style.id = 'asoul-sidebar-styles';
-    style.textContent = `
-      .asoul_sidebar {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        overflow: hidden;
-      }
-      .asoul_img_grid {
-        flex: 1;
-        overflow-y: auto;
-        padding: 8px;
-        display: flex;
-        flex-wrap: wrap;
-        align-content: flex-start;
-        background-color: #1a1a1a;
-      }
-      .asoul_tools {
-        padding: 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        background-color: #2a2a2a;
-      }
-      .asoul_tools select, .asoul_tools input, .asoul_tools button {
-        width: 100%;
-        padding: 6px;
-        margin-bottom: 5px;
-        background-color: #333;
-        border: 1px solid #444;
-        color: white;
-        border-radius: 3px;
-      }
-      .asoul_tools button {
-        background-color: #2980b9;
-        cursor: pointer;
-      }
-      .asoul_tools button:hover {
-        background-color: #3498db;
+  // 检查样式是否已存在
+  if (document.getElementById('asoul-upload-styles')) {
+    return;
+  }
+
+  // 创建样式标签
+  const styleEl = document.createElement('style');
+  styleEl.id = 'asoul-upload-styles';
+  styleEl.innerHTML = `
+    /* ASoul上传工具样式 */
+    .asoul_upload_container {
+      padding: 15px;
+      overflow-y: auto;
+      max-height: 100%;
+      border-radius: 5px;
+    }
+    .asoul_tab_container {
+      display: flex;
+      border-bottom: 1px solid #1976D2;
+      margin-bottom: 15px;
+    }
+    .asoul_tab {
+      padding: 8px 15px;
+      cursor: pointer;
+      user-select: none;
+      border: 1px solid transparent;
+      border-bottom: none;
+      border-radius: 4px 4px 0 0;
+      transition: background-color 0.2s;
+    }
+    .asoul_tab:hover {
+      background-color: rgba(33, 150, 243, 0.1);
+    }
+    .asoul_tab.active {
+      font-weight: bold;
+      border-color: #1976D2;
+      background-color: #2196F3;
+      color: white;
+      position: relative;
+    }
+    .asoul_tab.active:after {
+      content: '';
+      position: absolute;
+      height: 2px;
+      background: #2196F3;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+    }
+    .asoul_upload_section {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      padding: 15px;
+      border-radius: 4px;
+    }
+    .asoul_upload_section.active {
+      display: flex;
+    }
+    .asoul_file_drop {
+      border: 2px dashed #90CAF9;
+      border-radius: 5px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 10px;
+      font-weight: 500;
+    }
+    .asoul_file_drop:hover, .asoul_file_drop.dragging {
+      border-color: #2196F3;
+      background-color: rgba(33, 150, 243, 0.1);
+    }
+    .asoul_file_list {
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid;
+      border-radius: 4px;
+      padding: 5px;
+      margin-bottom: 10px;
+    }
+    .asoul_file_item {
+      padding: 8px;
+      border-bottom: 1px solid;
+      word-break: break-word;
+    }
+    .asoul_file_item:last-child {
+      border-bottom: none;
+    }
+    .asoul_upload_section button {
+      background-color: #2196F3;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+    .asoul_upload_section button:hover:not(:disabled) {
+      background-color: #1976D2;
+    }
+    .asoul_upload_section button:disabled {
+      background-color: #BDBDBD;
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    .asoul_upload_section label {
+      font-weight: 500;
+      margin-bottom: 5px;
+      display: block;
+    }
+    .asoul_upload_section input[type="text"], 
+    .asoul_upload_section select {
+      padding: 10px;
+      border: 1px solid;
+      border-radius: 4px;
+      width: 100%;
+    }
+    .asoul_upload_section select:focus,
+    .asoul_upload_section input[type="text"]:focus {
+      outline: none;
+      border-color: #2196F3;
+    }
+    .asoul_error {
+      color: #D32F2F;
+      margin-bottom: 10px;
+      padding: 8px;
+      border-radius: 4px;
+      border-left: 3px solid #F44336;
+    }
+    
+    /* 通知容器样式 */
+    #asoul-notification-container {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    
+    /* 适配暗色模式 */
+    @media (prefers-color-scheme: dark) {
+      .asoul_tab:not(.active) {
+        color: #e0e0e0;
       }
       .asoul_file_drop {
-        border: 2px dashed #666;
-        border-radius: 5px;
-        padding: 20px;
-        text-align: center;
-        background-color: rgba(0,0,0,0.2);
-        transition: all 0.3s;
-        margin-bottom: 10px;
+        color: #90CAF9;
       }
-      .asoul_file_drop.dragging {
-        background-color: rgba(41, 128, 185, 0.3);
-        border-color: #2980b9;
-      }
-      .asoul_upload_container {
-        padding: 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .asoul_file_list {
-        max-height: 200px;
-        overflow-y: auto;
-        margin: 10px 0;
-        background-color: #1a1a1a;
-        border-radius: 4px;
-        padding: 5px;
-      }
-      .asoul_file_item {
-        padding: 5px;
-        border-bottom: 1px solid #333;
-      }
-      .asoul_tab_container {
-        display: flex;
-        border-bottom: 1px solid #444;
-        margin-bottom: 10px;
-      }
-      .asoul_tab {
-        padding: 8px 12px;
-        cursor: pointer;
-        background-color: #2a2a2a;
-        border: 1px solid #444;
-        border-bottom: none;
-        border-radius: 4px 4px 0 0;
-        margin-right: 4px;
-      }
-      .asoul_tab.active {
-        background-color: #3498db;
-      }
-      .asoul_upload_section {
-        display: none;
-      }
-      .asoul_upload_section.active {
-        display: block;
-      }
-      .asoul_error {
-        color: #ff5555;
-        padding: 5px;
-        margin: 5px 0;
-        border: 1px solid #ff5555;
-        border-radius: 4px;
-        background-color: rgba(255, 85, 85, 0.1);
-      }
-      .asoul_warning {
-        color: #ffcc00;
-        padding: 5px;
-        margin: 5px 0;
-        border: 1px solid #ffcc00;
-        border-radius: 4px;
-        background-color: rgba(255, 204, 0, 0.1);
-      }
-    `;
-    document.head.appendChild(style);
-  }
+    }
+  `;
+
+  document.head.appendChild(styleEl);
 }
 
 // 加载JSZip库
@@ -680,11 +962,7 @@ const ASoulUploadExtension = {
               console.log('文件夹选择属性已设置');
             } catch (error) {
               console.error('设置文件夹选择属性时出错:', error);
-              app.ui.notifications?.show?.({
-                text: `您的浏览器可能不支持文件夹选择功能`,
-                type: 'warning',
-                timeout: 5000
-              });
+              showNotification(`您的浏览器可能不支持文件夹选择功能`, 'warning', 5000);
             }
 
             folderInput.style.display = 'none';
@@ -935,11 +1213,7 @@ const ASoulUploadExtension = {
                   }
                 } catch (error) {
                   console.error(`处理文件夹上传时出错:`, error);
-                  app.ui.notifications?.show?.({
-                    text: `上传文件夹失败: ${error.message}`,
-                    type: 'error',
-                    timeout: 5000
-                  });
+                  showNotification(`上传文件夹失败: ${error.message}`, 'error', 5000);
 
                   // 显示错误信息
                   const errorItem = makeElement('div', 'asoul_file_item');
@@ -1014,7 +1288,6 @@ const ASoulUploadExtension = {
             console.log("ASoul上传工具: 上传界面渲染完成");
           },
           destroy: () => {
-            container.remove();
             app.api.removeEventListener('status')
           },
         });

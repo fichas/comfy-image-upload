@@ -283,17 +283,58 @@ async def upload_folder_process(reader, temp_files):
     # 创建目标文件夹
     os.makedirs(target_dir, exist_ok=True)
     
-    # 解压ZIP文件到目标文件夹
+    # 解压ZIP文件到目标文件夹，但只提取图片文件
+    extracted_count = 0
+    skipped_count = 0
     with zipfile.ZipFile(temp_file_path, "r") as zip_ref:
-        log.info(f"解压ZIP文件到: {target_dir}")
-        zip_ref.extractall(target_dir)
-        file_count = len(zip_ref.infolist())
+        log.info(f"解压ZIP文件到: {target_dir}，仅提取图片文件")
+        
+        for file_info in zip_ref.infolist():
+            # 跳过目录项
+            if file_info.is_dir():
+                continue
+            
+            # 检查是否为图片文件
+            file_ext = os.path.splitext(file_info.filename.lower())[1]
+            if file_ext in IMAGE_EXTENSIONS:
+                # 确保文件所在的子目录存在
+                file_path = os.path.join(target_dir, file_info.filename)
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                
+                # 提取文件
+                source = zip_ref.open(file_info)
+                with open(file_path, "wb") as target:
+                    shutil.copyfileobj(source, target)
+                
+                # 进一步验证是否为有效图片
+                if is_image_file(file_path):
+                    extracted_count += 1
+                    log.info(f"已提取图片: {file_info.filename}")
+                else:
+                    # 如果不是有效图片，删除它
+                    os.remove(file_path)
+                    skipped_count += 1
+                    log.info(f"已删除无效图片: {file_info.filename}")
+            else:
+                skipped_count += 1
+                log.info(f"已跳过非图片文件: {file_info.filename}")
+    
+    if extracted_count == 0:
+        return {
+            "success": False,
+            "message": f"文件夹中没有有效的图片文件，已跳过 {skipped_count} 个非图片文件",
+            "folder_path": target_dir,
+            "extracted_count": 0,
+            "skipped_count": skipped_count
+        }
     
     return {
         "success": True,
-        "message": f"文件夹已成功上传到 {target_dir}，共 {file_count} 个文件",
+        "message": f"文件夹已成功上传到 {target_dir}，共提取 {extracted_count} 个图片文件" +
+                   (f"，跳过 {skipped_count} 个非图片文件" if skipped_count > 0 else ""),
         "folder_path": target_dir,
-        "file_count": file_count
+        "extracted_count": extracted_count,
+        "skipped_count": skipped_count
     }
 
 
