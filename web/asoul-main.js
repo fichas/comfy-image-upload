@@ -815,7 +815,7 @@ const ASoulUploadExtension = {
 
             const container = makeElement('div', 'asoul_upload_container');
             const heading = document.createElement('h3');
-            heading.textContent = '文件上传工具';
+            heading.textContent = '图片上传工具';
 
             // 创建选项卡
             const tabContainer = makeElement('div', 'asoul_tab_container');
