@@ -19,7 +19,21 @@ import imghdr  # 用于检测文件是否为图片
 
 from aiohttp import web
 import folder_paths
+import torch
+from PIL import ImageOps
+try:
+    import pillow_jxl      # noqa: F401
+    jxl = True
+except ImportError:
+    jxl = False
+import comfy
+import folder_paths
+import base64
+from io import BytesIO
 
+from PIL import Image
+import numpy as np
+import logging
 # 设置日志
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -73,9 +87,124 @@ IMAGE_EXTENSIONS = {
     ".heic",
 }
 
-# 公开的节点和显示名称映射（本扩展不包含节点）
-NODE_CLASS_MAPPINGS = {}
-NODE_DISPLAY_NAME_MAPPINGS = {}
+# refactor by fichas, original code from https://raw.githubusercontent.com/ltdrdata/ComfyUI-Inspire-Pack/0f38db4180ce7836a80765111b87d5b4376a7a45/inspire/image_util.py
+class LoadImagesFromBatch:
+    @classmethod
+    
+    def INPUT_TYPES(s):
+        dirs = get_input_subdirectories()
+        return {
+            "required": {
+                "directory": (dirs, {"default": dirs[0]}),
+            },
+            "optional": {
+                "image_load_cap": ("INT", {"default": 0, "min": 0, "step": 1}),
+                "start_index": ("INT", {"default": 0, "min": -1, "max": 0xffffffffffffffff, "step": 1}),
+                "load_always": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "INT")
+    FUNCTION = "load_images"
+
+    CATEGORY = "image"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        if 'load_always' in kwargs and kwargs['load_always']:
+            return float("NaN")
+        else:
+            return hash(frozenset(kwargs))
+
+    def load_images(self, directory: str, image_load_cap: int = 0, start_index: int = 0, load_always=False):
+        directory = os.path.join(input_dir, directory)
+        if not os.path.isdir(directory):
+            raise FileNotFoundError(f"Directory '{directory} cannot be found.'")
+        dir_files = os.listdir(directory)
+        if len(dir_files) == 0:
+            raise FileNotFoundError(f"No files in directory '{directory}'.")
+
+        # Filter files by extension
+        valid_extensions = ['.jpg', '.jpeg', '.png', '.webp']
+        if jxl:
+            valid_extensions.extend('.jxl')
+        dir_files = [f for f in dir_files if any(f.lower().endswith(ext) for ext in valid_extensions)]
+
+        dir_files = sorted(dir_files)
+        dir_files = [os.path.join(directory, x) for x in dir_files]
+
+        # start at start_index
+        dir_files = dir_files[start_index:]
+
+        images = []
+        masks = []
+
+        limit_images = False
+        if image_load_cap > 0:
+            limit_images = True
+        image_count = 0
+
+        has_non_empty_mask = False
+
+        for image_path in dir_files:
+            if os.path.isdir(image_path) and os.path.ex:
+                continue
+            if limit_images and image_count >= image_load_cap:
+                break
+            i = Image.open(image_path)
+            i = ImageOps.exif_transpose(i)
+            image = i.convert("RGB")
+            image = np.array(image).astype(np.float32) / 255.0
+            image = torch.from_numpy(image)[None,]
+            if 'A' in i.getbands():
+                mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
+                mask = 1. - torch.from_numpy(mask)
+                has_non_empty_mask = True
+            else:
+                mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
+            images.append(image)
+            masks.append(mask)
+            image_count += 1
+
+        if len(images) == 1:
+            return (images[0], masks[0], 1)
+
+        elif len(images) > 1:
+            image1 = images[0]
+            mask1 = None
+
+            for image2 in images[1:]:
+                if image1.shape[1:] != image2.shape[1:]:
+                    image2 = comfy.utils.common_upscale(image2.movedim(-1, 1), image1.shape[2], image1.shape[1], "bilinear", "center").movedim(1, -1)
+                image1 = torch.cat((image1, image2), dim=0)
+
+            for mask2 in masks:
+                if has_non_empty_mask:
+                    if image1.shape[1:3] != mask2.shape:
+                        mask2 = torch.nn.functional.interpolate(mask2.unsqueeze(0).unsqueeze(0), size=(image1.shape[1], image1.shape[2]), mode='bilinear', align_corners=False)
+                        mask2 = mask2.squeeze(0)
+                    else:
+                        mask2 = mask2.unsqueeze(0)
+                else:
+                    mask2 = mask2.unsqueeze(0)
+
+                if mask1 is None:
+                    mask1 = mask2
+                else:
+                    mask1 = torch.cat((mask1, mask2), dim=0)
+
+            return (image1, mask1, len(images))
+
+
+
+
+# 公开的节点和显示名称映射
+NODE_CLASS_MAPPINGS = {
+    "LoadImagesFromBatch": LoadImagesFromBatch,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "LoadImagesFromBatch": "从Input目录加载图片",
+}
 # 确认WEB_DIRECTORY指向custom_node下的web目录，添加扩展JS
 WEB_DIRECTORY = "./web"
 
@@ -459,7 +588,7 @@ if IN_COMFY and hasattr(PromptServer, "instance"):
 
 # 扩展信息
 MANIFEST = {
-    "name": "文件上传工具",
+    "name": "图片上传工具",
     "version": (0, 1, 0),
     "author": "ComfyUI Community",
     "project": "https://github.com/your-username/comfy-image-upload",
